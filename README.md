@@ -4,7 +4,7 @@ Next.js App Router backoffice for Supabase-authenticated team members. The Repor
 
 ## Local setup
 
-1. Install dependencies with `npm install` and configure `.env` with `DATABASE_URL`, `DIRECT_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY`, and `GOOGLE_DRIVE_FOLDER_ID`.
+1. Install dependencies with `npm install` and configure `.env` with `DATABASE_URL`, `DIRECT_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY`, and `GOOGLE_DRIVE_FOLDER_ID`. The Supabase URL and publishable key must belong to the same project as the database URLs.
 2. Review `prisma/schema.prisma` and the checked-in migrations.
 3. Apply the migration to the intended database with `npx prisma migrate deploy`. This repository does not apply migrations automatically.
 4. Create team accounts in Supabase Auth. Any authenticated user can run the Drive import; no workspace hierarchy, membership, or local `public.users` row is required.
@@ -14,6 +14,12 @@ Next.js App Router backoffice for Supabase-authenticated team members. The Repor
 ## User profile settings
 
 Profile name, phone, and address are saved to the authenticated Supabase user's metadata. Profile pictures are stored privately in the `profile-avatars` Supabase Storage bucket and are scoped to each user's UUID. The Prisma migration creates the bucket and authenticated-user Storage policies; apply it with the migration command above before using profile-picture uploads.
+
+## Vercel deployment
+
+Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in the Vercel Production environment to values from the same Supabase project used by `DATABASE_URL` and `DIRECT_URL`, then redeploy so the public variables are included in the client build. Vercel does not apply Prisma migrations automatically. Before using profile photos or saved table views in Production, verify the Production database is migrated and that the matching Supabase project's Storage dashboard contains the private `profile-avatars` bucket. If local uploads work but Production reports “Bucket not found,” check the Production project's URL and bucket rather than changing the upload flow.
+
+Profile pictures and saved table views are scoped to the signed-in Supabase user. To see the same profile and saved view names locally and in Production, sign in with the same Supabase account in both. The selected view is remembered separately in each browser.
 
 ## Google Drive reports
 
