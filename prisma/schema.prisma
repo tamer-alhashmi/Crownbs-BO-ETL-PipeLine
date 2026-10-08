@@ -1,0 +1,275 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum ImportStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  COMPLETED_WITH_ERRORS
+  FAILED
+  CANCELLED
+
+  @@map("import_status")
+}
+
+enum ImportFileStatus {
+  PENDING
+  VALIDATING
+  IMPORTING
+  COMPLETED
+  COMPLETED_WITH_ERRORS
+  FAILED
+
+  @@map("import_file_status")
+}
+
+enum FileStorageProvider {
+  SUPABASE_STORAGE
+  GOOGLE_DRIVE
+
+  @@map("file_storage_provider")
+}
+
+model User {
+  // Set this to the matching Supabase Auth user UUID; passwords stay in Supabase Auth.
+  id             String    @id @db.Uuid
+  email          String    @unique @db.VarChar(320)
+  full_name      String?   @db.VarChar(200)
+  phone_number   String?   @db.VarChar(40)
+  address_line_1 String?   @db.VarChar(200)
+  address_line_2 String?   @db.VarChar(200)
+  city           String?   @db.VarChar(120)
+  region         String?   @db.VarChar(120)
+  postal_code    String?   @db.VarChar(32)
+  country_code   String?   @db.Char(2)
+  avatar_url     String?   @db.Text
+  created_at     DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime  @updatedAt @db.Timestamptz(6)
+  deleted_at     DateTime? @db.Timestamptz(6)
+
+  audit_events AuditLog[] @relation("AuditActor")
+  table_views  TableView[]
+
+  @@map("users")
+}
+
+model TableView {
+  id                String   @id @default(uuid()) @db.Uuid
+  name              String   @db.VarChar(80)
+  table_name        String   @db.VarChar(80)
+  column_visibility Json     @db.JsonB
+  column_order      Json     @db.JsonB
+  user_id           String   @db.Uuid
+  created_at        DateTime @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime @updatedAt @db.Timestamptz(6)
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, table_name, name])
+  @@index([user_id, table_name, created_at])
+  @@map("table_views")
+}
+
+model ImportBatch {
+  id            String       @id @default(uuid()) @db.Uuid
+  // Supabase Auth UUID; intentionally not tied to a workspace or local user row.
+  created_by_id String       @db.Uuid
+  status        ImportStatus @default(QUEUED)
+  started_at    DateTime?    @db.Timestamptz(6)
+  completed_at  DateTime?    @db.Timestamptz(6)
+  error_message String?      @db.Text
+  created_at    DateTime     @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime     @updatedAt @db.Timestamptz(6)
+
+  files ImportFile[]
+
+  @@index([created_by_id])
+  @@map("import_batches")
+}
+
+model ImportFile {
+  id                     String              @id @default(uuid()) @db.Uuid
+  import_batch_id        String              @db.Uuid
+  original_file_name     String              @db.VarChar(255)
+  storage_provider       FileStorageProvider @default(SUPABASE_STORAGE)
+  storage_path           String?             @db.Text
+  google_drive_file_id   String?             @db.VarChar(255)
+  google_drive_folder_id String?             @db.VarChar(255)
+  content_type           String?             @db.VarChar(160)
+  byte_size              BigInt?
+  sha256                 String?             @db.Char(64)
+  status                 ImportFileStatus    @default(PENDING)
+  total_rows             Int?
+  imported_rows          Int?
+  rejected_rows          Int?
+  error_message          String?             @db.Text
+  completed_at           DateTime?           @db.Timestamptz(6)
+  created_at             DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime            @updatedAt @db.Timestamptz(6)
+
+  import_batch ImportBatch   @relation(fields: [import_batch_id], references: [id], onDelete: Cascade)
+  bookings     Booking[]
+  payments     Payment[]
+  issues       ImportIssue[]
+
+  @@index([import_batch_id, status])
+  @@index([sha256])
+  @@index([google_drive_file_id])
+  @@map("import_files")
+}
+
+model ImportIssue {
+  id             String   @id @default(uuid()) @db.Uuid
+  import_file_id String   @db.Uuid
+  row_number     Int?
+  column_name    String?  @db.VarChar(160)
+  issue_code     String   @db.VarChar(80)
+  message        String   @db.Text
+  raw_value      String?  @db.Text
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+
+  import_file ImportFile @relation(fields: [import_file_id], references: [id], onDelete: Cascade)
+
+  @@index([import_file_id, row_number])
+  @@map("import_issues")
+}
+
+model Booking {
+  id                String    @id @default(uuid()) @db.Uuid
+  import_file_id    String?   @db.Uuid
+  source_row_number Int?
+  source_system     String    @default("eviivo") @db.VarChar(64)
+  internal_company  String?   @db.VarChar(80)
+  property_name     String?   @db.VarChar(200)
+  booking_date      DateTime? @db.Date
+  booking_reference String    @db.VarChar(128)
+  order_reference   String?   @db.VarChar(128)
+  ota_reference     String?   @db.VarChar(128)
+  guest_name        String?   @db.VarChar(200)
+  guest_first_name  String?   @db.VarChar(120)
+  guest_last_name   String?   @db.VarChar(120)
+  arrival_date      DateTime? @db.Date
+  departure_date    DateTime? @db.Date
+  booking_status    String?   @db.VarChar(80)
+  total_amount      Decimal   @db.Decimal(10, 2)
+  total_override    Decimal?  @db.Decimal(10, 2)
+  paid_amount       Decimal   @default(0) @db.Decimal(10, 2)
+  manual_paid_amount Decimal  @default(0) @db.Decimal(10, 2)
+  room_unit_revenue Decimal   @default(0) @db.Decimal(10, 2)
+  other_revenue     Decimal?  @db.Decimal(10, 2)
+  deposit_amount    Decimal?  @db.Decimal(10, 2)
+  currency_code     String?   @db.Char(3)
+  source_data       Json      @db.JsonB
+  guest_overrides   Json      @default("{}") @db.JsonB
+  card_overrides    Json      @default("{}") @db.JsonB
+  created_at        DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime  @updatedAt @db.Timestamptz(6)
+  deleted_at        DateTime? @db.Timestamptz(6)
+
+  import_file ImportFile? @relation(fields: [import_file_id], references: [id], onDelete: Restrict)
+  payments    Payment[]
+  charges     BookingCharge[]
+  card_audit_events BookingCardAuditEvent[]
+
+  @@unique([source_system, booking_reference])
+  @@unique([import_file_id, source_row_number])
+  @@index([arrival_date])
+  @@index([booking_status])
+  @@map("bookings")
+}
+
+model BookingCharge {
+  id            String   @id @default(uuid()) @db.Uuid
+  booking_id    String   @db.Uuid
+  description   String   @db.VarChar(200)
+  quantity      Decimal  @default(1) @db.Decimal(10, 2)
+  amount        Decimal  @db.Decimal(10, 2)
+  kind          String   @default("CHARGE") @db.VarChar(16)
+  created_by_id String   @db.Uuid
+  created_by_email String? @db.VarChar(320)
+  updated_by_id String?  @db.Uuid
+  updated_by_email String? @db.VarChar(320)
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime @updatedAt @db.Timestamptz(6)
+
+  booking Booking @relation(fields: [booking_id], references: [id], onDelete: Cascade)
+
+  @@index([booking_id, created_at])
+  @@map("booking_charges")
+}
+
+model BookingCardAuditEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  booking_id  String   @db.Uuid
+  actor_id    String   @db.Uuid
+  actor_email String?  @db.VarChar(320)
+  action      String   @db.VarChar(80)
+  details     Json?    @db.JsonB
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  booking Booking @relation(fields: [booking_id], references: [id], onDelete: Cascade)
+
+  @@index([booking_id, created_at])
+  @@map("booking_card_audit_events")
+}
+
+model Payment {
+  id                String    @id @default(uuid()) @db.Uuid
+  booking_id        String?   @db.Uuid
+  import_file_id    String?   @db.Uuid
+  source_row_number Int?
+  source_system     String    @default("eviivo") @db.VarChar(64)
+  payment_id        String    @db.VarChar(128)
+  booking_reference String?   @db.VarChar(128)
+  payment_reference String?   @db.VarChar(128)
+  payment_date      DateTime? @db.Timestamptz(6)
+  payment_method    String?   @db.VarChar(80)
+  payment_status    String?   @db.VarChar(80)
+  description       String?   @db.Text
+  property_name     String?   @db.VarChar(200)
+  relating_to       String[]  @default([])
+  processed_by_id   String?   @db.Uuid
+  processed_by_email String? @db.VarChar(320)
+
+  // ETL maps the exact source header "Direct1" from the payment report here.
+  direct_1      Decimal   @db.Decimal(10, 2)
+  currency_code String?   @db.Char(3)
+  source_data   Json      @db.JsonB
+  created_at    DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime  @updatedAt @db.Timestamptz(6)
+  deleted_at    DateTime? @db.Timestamptz(6)
+
+  booking     Booking?    @relation(fields: [booking_id], references: [id], onDelete: Restrict)
+  import_file ImportFile? @relation(fields: [import_file_id], references: [id], onDelete: Restrict)
+
+  @@unique([source_system, payment_id])
+  @@unique([import_file_id, source_row_number])
+  @@index([payment_date])
+  @@index([booking_id])
+  @@index([payment_status])
+  @@map("payments")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  actor_id    String?  @db.Uuid
+  action      String   @db.VarChar(100)
+  entity_type String   @db.VarChar(100)
+  entity_id   String?  @db.VarChar(128)
+  metadata    Json?    @db.JsonB
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  actor User? @relation("AuditActor", fields: [actor_id], references: [id], onDelete: SetNull)
+
+  @@index([created_at])
+  @@index([entity_type, entity_id])
+  @@index([actor_id])
+  @@map("audit_logs")
+}
