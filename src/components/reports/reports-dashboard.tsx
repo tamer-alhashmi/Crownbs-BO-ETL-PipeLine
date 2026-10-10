@@ -123,6 +123,16 @@ const bookingSourceColumns = BOOKING_HEADERS.flatMap((header) => {
       cell: (info) => {
         const value = info.getValue();
         if (header === "Booking Status") return <StatusBadge status={value || "Unknown"} />;
+        if (header === "Booking Notes") {
+          return value ? (
+            <span
+              className="block w-[130px] max-w-[130px] truncate whitespace-nowrap"
+              title={value}
+            >
+              {value}
+            </span>
+          ) : "—";
+        }
         if (!bookingMoneyHeaders.has(header) || !value.trim()) return value || "—";
         return (
           <span className={header === "Total Revenue" ? "font-semibold text-success" : ""}>

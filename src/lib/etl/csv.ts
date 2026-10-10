@@ -21,6 +21,8 @@ export type ParsedBookings = {
     rowNumber: number;
     source: SourceRecord;
     internalCompany: string;
+    isGroupPayment: boolean;
+    groupPaymentParentRef: string | null;
     total: string;
     paid: string;
     room: string;
@@ -88,6 +90,13 @@ function hasValidDate(value: string) {
   return !value.trim() || parseReportDate(value) !== null;
 }
 
+function hasValidIsoDate(value: string) {
+  if (!value.trim()) return true;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
 export function parseBookingsCsv(csv: string, internalCompany: string): ParsedBookings {
   if (!internalCompany.trim()) throw new Error("Bookings CSV requires a filename-derived Crown BS Company.");
   const grid = parseGrid(csv);
@@ -114,8 +123,14 @@ export function parseBookingsCsv(csv: string, internalCompany: string): ParsedBo
       });
       return;
     }
-    const invalidDateColumn = ["Booking Date", "Check In", "Check Out", "Booking Date and Time", "Arrival"]
-      .find((column) => !hasValidDate(source[column] ?? ""));
+    const bookingDate = source["Booking Date"] || source["Booking Date and Time"];
+    const invalidDateColumn = !hasValidDate(bookingDate)
+      ? "Booking Date"
+      : !hasValidIsoDate(source["Check In"])
+        ? "Check In"
+        : !hasValidIsoDate(source["Check Out"])
+          ? "Check Out"
+          : null;
     if (invalidDateColumn) {
       issues.push({
         row_number: rowNumber,
@@ -127,15 +142,23 @@ export function parseBookingsCsv(csv: string, internalCompany: string): ParsedBo
     }
 
     try {
+      const groupPaymentMatch = source["Paid Amount"].match(/^(?:See|C)\s*([\w-]+)/i);
+      const isGroupPayment = groupPaymentMatch !== null;
+      const groupPaymentParentRef = groupPaymentMatch?.[1] ?? null;
       const cleaned = cleanBookingRecord(source);
       if (cleaned.dropped) {
         droppedRows++;
         return;
       }
+      const normalizedSource = isGroupPayment
+        ? { ...cleaned.source, "Paid Amount": source["Paid Amount"] }
+        : cleaned.source;
       rows.push({
         rowNumber,
-        source: cleaned.source,
+        source: normalizedSource,
         internalCompany,
+        isGroupPayment,
+        groupPaymentParentRef,
         total: cleaned.totalRevenue,
         paid: cleaned.paidAmount,
         room: cleaned.roomRevenue,

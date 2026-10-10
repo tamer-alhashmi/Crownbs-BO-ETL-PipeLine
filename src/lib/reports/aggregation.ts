@@ -112,7 +112,7 @@ export type BookingReportRow = {
   paymentTotals: Record<string, string>;
   transactionTotal: string;
   dueAmount: string;
-  balanceStatus: "Paid" | "Partially paid" | "Unpaid";
+  balanceStatus: "Prepaid" | "Partially paid" | "Payment on arrival";
 };
 
 export type PaymentReportRow = {
@@ -126,7 +126,7 @@ export function parseDecimalAmount(value: string, fieldName: string) {
   if (!raw) return new Decimal(0);
 
   const negativeParentheses = /^\(.*\)$/.test(raw);
-  const normalized = raw.replace(/[£$€,\s()]/g, "");
+  const normalized = raw.replace(/[\p{Sc},\s()]/gu, "");
   if (!/^-?\d+(?:\.\d+)?$/.test(normalized)) {
     throw new Error(`Invalid monetary value in "${fieldName}".`);
   }
@@ -138,36 +138,84 @@ export function parseDecimalAmount(value: string, fieldName: string) {
 export function cleanBookingRecord(record: SourceRecord) {
   const source = { ...record };
   const bookingStatus = source["Booking Status"]?.trim().toLocaleLowerCase();
-  const sourceTotal = parseDecimalAmount(source["Total Revenue"] ?? "", "Total Revenue");
-  const sourcePaid = parseDecimalAmount(source["Paid Amount"] ?? "", "Paid Amount");
+  const isGroupPayment = /^(?:See|C)\s*([\w-]+)/i.test(source["Paid Amount"] ?? "");
+  const sourcePaid = isGroupPayment
+    ? new Decimal(0)
+    : parseDecimalAmount(source["Paid Amount"] ?? "", "Paid Amount");
+  const roomRevenue = parseDecimalAmount(source["Room/Unit Revenue"] ?? "", "Room/Unit Revenue");
+  const hasOtherRevenue = Boolean(source["Other Revenue"]?.trim());
+  const otherRevenue = parseDecimalAmount(source["Other Revenue"] ?? "", "Other Revenue");
+  const totalRevenue = roomRevenue.plus(otherRevenue);
 
-  if (bookingStatus === "canceled" && sourceTotal.isZero() && sourcePaid.isZero()) {
+  if (
+    bookingStatus === "canceled" &&
+    totalRevenue.isZero() &&
+    sourcePaid.isZero() &&
+    !isGroupPayment
+  ) {
     return { dropped: true as const, source };
   }
 
-  let otherRevenue = parseDecimalAmount(source["Other Revenue"] ?? "", "Other Revenue");
-  if (otherRevenue.equals(100)) {
-    source["Other Revenue"] = "";
-    otherRevenue = new Decimal(0);
-  }
-
-  const roomRevenue = parseDecimalAmount(source["Room/Unit Revenue"] ?? "", "Room/Unit Revenue");
   const promoDiscount = source["Promo Discount"]?.trim()
     ? parseDecimalAmount(source["Promo Discount"], "Promo Discount").toFixed(2)
     : "";
-  source["Total Revenue"] = roomRevenue.plus(otherRevenue).toFixed(2);
+  source["Total Revenue"] = totalRevenue.toFixed(2);
   source["Paid Amount"] = sourcePaid.toFixed(2);
   source["Room/Unit Revenue"] = roomRevenue.toFixed(2);
-  source["Other Revenue"] = otherRevenue.isZero() ? "" : otherRevenue.toFixed(2);
+  source["Other Revenue"] = hasOtherRevenue ? otherRevenue.toFixed(2) : "";
   if (promoDiscount) source["Promo Discount"] = promoDiscount;
   return {
     dropped: false as const,
     source,
-    totalRevenue: roomRevenue.plus(otherRevenue).toFixed(2),
-    otherRevenue: otherRevenue.isZero() ? null : otherRevenue.toFixed(2),
+    totalRevenue: totalRevenue.toFixed(2),
+    otherRevenue: hasOtherRevenue ? otherRevenue.toFixed(2) : null,
     roomRevenue: roomRevenue.toFixed(2),
     paidAmount: sourcePaid.toFixed(2),
   };
+}
+
+export function allocateGroupPayment(
+  collectedAmount: string,
+  parentReference: string,
+  bookings: Array<{ bookingReference: string; roomRevenue: string }>,
+) {
+  const parent = bookings.find((booking) => booking.bookingReference === parentReference);
+  if (!parent) throw new Error(`Group payment parent "${parentReference}" is missing.`);
+
+  const weights = new Map(
+    bookings.map((booking) => [
+      booking.bookingReference,
+      Decimal.max(new Decimal(booking.roomRevenue), 0),
+    ]),
+  );
+  const totalWeight = [...weights.values()].reduce(
+    (sum, weight) => sum.plus(weight),
+    new Decimal(0),
+  );
+  const collected = new Decimal(collectedAmount);
+  const allocations = new Map<string, Decimal>();
+  let childAllocations = new Decimal(0);
+
+  for (const booking of bookings) {
+    if (booking.bookingReference === parentReference) continue;
+    const share = totalWeight.isZero()
+      ? new Decimal(0)
+      : collected
+          .times(weights.get(booking.bookingReference) ?? 0)
+          .dividedBy(totalWeight)
+          .toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    allocations.set(booking.bookingReference, share);
+    childAllocations = childAllocations.plus(share);
+  }
+
+  allocations.set(
+    parentReference,
+    totalWeight.isZero() ? collected : collected.minus(childAllocations),
+  );
+  return [...allocations].map(([bookingReference, paidAmount]) => ({
+    bookingReference,
+    paidAmount: paidAmount.toFixed(2),
+  }));
 }
 
 export function buildBookingReportRows(
@@ -229,9 +277,9 @@ export function buildBookingReportRows(
       transactionTotal: transactionTotal.toFixed(2),
       dueAmount: dueAmount.toFixed(2),
       balanceStatus: dueAmount.isZero()
-        ? "Paid"
+        ? "Prepaid"
         : transactionTotal.isZero()
-          ? "Unpaid"
+          ? "Payment on arrival"
           : "Partially paid",
     };
   }).filter((row): row is BookingReportRow => row !== null);

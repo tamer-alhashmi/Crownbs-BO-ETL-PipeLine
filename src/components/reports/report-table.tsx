@@ -85,6 +85,13 @@ export function ReportTable<TData extends object>({
   const [columnVisibility, setColumnVisibility] = useState<ColumnVisibilityState>({});
   const [columnOrder, setColumnOrder] = useState<ColumnOrderState>([]);
   const [sorting, setSorting] = useState<SortingState>([]);
+  const updateColumnVisibility = useCallback((
+    updater: ColumnVisibilityState | ((current: ColumnVisibilityState) => ColumnVisibilityState),
+  ) => {
+    setColumnVisibility((current) =>
+      typeof updater === "function" ? updater(current) : updater,
+    );
+  }, []);
   function updateColumnFilters(updater: ColumnFiltersState | ((current: ColumnFiltersState) => ColumnFiltersState)) {
     const next = typeof updater === "function" ? updater(columnFilters) : updater;
     setColumnFilters(next);
@@ -107,7 +114,7 @@ export function ReportTable<TData extends object>({
     state: { columnFilters, columnOrder, columnVisibility, sorting },
     onColumnFiltersChange: updateColumnFilters,
     onColumnOrderChange: setColumnOrder,
-    onColumnVisibilityChange: setColumnVisibility,
+    onColumnVisibilityChange: updateColumnVisibility,
     onSortingChange: setSorting,
   });
   const visibleRows = table.getRowModel().rows;
@@ -135,7 +142,7 @@ export function ReportTable<TData extends object>({
             tableName={tableName}
             columnVisibility={columnVisibility}
             columnOrder={columnOrder}
-            setColumnVisibility={setColumnVisibility}
+            setColumnVisibility={updateColumnVisibility}
             setColumnOrder={setColumnOrder}
           />
           <ColumnVisibilityMenu
@@ -168,14 +175,22 @@ export function ReportTable<TData extends object>({
                   <th
                     key={header.id}
                     scope="col"
-                    className="relative whitespace-nowrap border-b border-r border-border px-3 py-2.5 font-semibold text-muted-foreground last:border-r-0"
+                    className={`relative border-b border-r border-border px-3 py-2.5 font-semibold text-muted-foreground last:border-r-0 ${
+                      header.column.id === "balance-status"
+                        ? "w-[100px] min-w-[100px] max-w-[100px] whitespace-normal"
+                        : header.column.id === "Booking Notes" || header.column.id === "Notes"
+                          ? "w-[130px] max-w-[130px] whitespace-nowrap"
+                          : "whitespace-nowrap"
+                    }`}
                   >
                     {!header.isPlaceholder && (
-                      <div className="flex items-center gap-1.5">
+                      <div className={`flex items-center gap-1.5 ${header.column.id === "balance-status" ? "flex-wrap" : ""}`}>
                         <button
                           type="button"
                           onClick={header.column.getToggleSortingHandler()}
-                          className="inline-flex items-center gap-1.5 rounded px-0.5 py-1 text-left hover:text-primary"
+                          className={`inline-flex items-center gap-1.5 rounded px-0.5 py-1 text-left hover:text-primary ${
+                            header.column.id === "balance-status" ? "max-w-[66px] whitespace-normal leading-tight" : ""
+                          }`}
                           aria-label={`Sort by ${header.column.id}`}
                         >
                           <table.FlexRender header={header} />
@@ -215,6 +230,7 @@ export function ReportTable<TData extends object>({
                   }
                   cells={row.getVisibleCells().map((cell) => ({
                     id: cell.id,
+                    columnId: cell.column.id,
                     content: table.FlexRender({ cell }),
                   }))}
                 />
@@ -294,7 +310,9 @@ function SavedViewsMenu({
   tableName: "BookingsReport" | "PaymentsReport";
   columnVisibility: ColumnVisibilityState;
   columnOrder: ColumnOrderState;
-  setColumnVisibility: Dispatch<SetStateAction<ColumnVisibilityState>>;
+  setColumnVisibility: (
+    updater: ColumnVisibilityState | ((current: ColumnVisibilityState) => ColumnVisibilityState),
+  ) => void;
   setColumnOrder: Dispatch<SetStateAction<ColumnOrderState>>;
 }) {
   const [views, setViews] = useState<SavedView[]>([]);

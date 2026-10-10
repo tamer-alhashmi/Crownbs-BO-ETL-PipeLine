@@ -3,6 +3,8 @@
 import { Check, LoaderCircle, Upload, UserRound } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
+import { ActionSummaryModal } from "@/components/ui/ActionSummaryModal";
+import { useFormDiff, type FormChange } from "@/lib/forms/use-form-diff";
 import { createClient } from "@/lib/supabase/client";
 
 type ProfileSettingsProps = {
@@ -18,6 +20,13 @@ const maxAvatarSize = 5 * 1024 * 1024;
 const supportedAvatarTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const avatarBucket = "profile-avatars";
 
+type ProfileSubmission = {
+  name: string;
+  phone: string;
+  address: string;
+  avatar: File | null;
+};
+
 export function ProfileSettings({
   email,
   fullName,
@@ -30,7 +39,16 @@ export function ProfileSettings({
   const [name, setName] = useState(fullName);
   const [phoneNumber, setPhoneNumber] = useState(phone);
   const [userAddress, setUserAddress] = useState(address);
+  const [initialProfile, setInitialProfile] = useState({
+    name: fullName,
+    phone,
+    address,
+    avatarPath: avatarUrl,
+  });
   const [selectedAvatar, setSelectedAvatar] = useState<File | null>(null);
+  const [pendingSubmission, setPendingSubmission] = useState<ProfileSubmission | null>(null);
+  const [summaryChanges, setSummaryChanges] = useState<FormChange[]>([]);
+  const getChanges = useFormDiff();
   const [avatarPreviewState, setAvatarPreviewState] = useState({
     source: avatarUrl,
     preview: avatarUrl,
@@ -69,8 +87,40 @@ export function ProfileSettings({
     setIsError(false);
   }
 
-  async function handleSave(event: FormEvent<HTMLFormElement>) {
+  function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const submission: ProfileSubmission = {
+      name: name.trim(),
+      phone: phoneNumber.trim(),
+      address: userAddress.trim(),
+      avatar: selectedAvatar,
+    };
+    const changes = getChanges(
+      {
+        name: initialProfile.name.trim(),
+        phone: initialProfile.phone.trim(),
+        address: initialProfile.address.trim(),
+        avatar: initialProfile.avatarPath ? "Current photo" : "No photo",
+      },
+      {
+        name: submission.name,
+        phone: submission.phone,
+        address: submission.address,
+        avatar: submission.avatar?.name ?? (initialProfile.avatarPath ? "Current photo" : "No photo"),
+      },
+      { name: "Full name", phone: "Phone number", address: "Address", avatar: "Profile picture" },
+    );
+    if (!changes.length) {
+      setMessage("There are no profile changes to save.");
+      setIsError(false);
+      return;
+    }
+    setPendingSubmission(submission);
+    setSummaryChanges(changes);
+  }
+
+  async function confirmSave() {
+    if (!pendingSubmission) return;
     setIsSaving(true);
     setMessage("");
     setIsError(false);
@@ -90,14 +140,14 @@ export function ProfileSettings({
       let nextAvatarPath = currentAvatarPath;
       const previousAvatarPath = currentAvatarPath;
 
-      if (selectedAvatar) {
-        const extension = selectedAvatar.type.split("/")[1].replace("jpeg", "jpg");
+      if (pendingSubmission.avatar) {
+        const extension = pendingSubmission.avatar.type.split("/")[1].replace("jpeg", "jpg");
         uploadedAvatarPath = `${authData.user.id}/${crypto.randomUUID()}.${extension}`;
         const { error: uploadError } = await supabase.storage
           .from(avatarBucket)
-          .upload(uploadedAvatarPath, selectedAvatar, {
+          .upload(uploadedAvatarPath, pendingSubmission.avatar, {
             cacheControl: "3600",
-            contentType: selectedAvatar.type,
+            contentType: pendingSubmission.avatar.type,
             upsert: true,
           });
         if (uploadError) {
@@ -108,9 +158,9 @@ export function ProfileSettings({
 
       const { error: updateError } = await supabase.auth.updateUser({
         data: {
-          full_name: name.trim(),
-          phone: phoneNumber.trim(),
-          address: userAddress.trim(),
+          full_name: pendingSubmission.name,
+          phone: pendingSubmission.phone,
+          address: pendingSubmission.address,
           avatar_path: nextAvatarPath,
         },
       });
@@ -130,7 +180,7 @@ export function ProfileSettings({
       }
 
       let cleanupWarning = "";
-      if (selectedAvatar && previousAvatarPath && previousAvatarPath !== uploadedAvatarPath) {
+      if (pendingSubmission.avatar && previousAvatarPath && previousAvatarPath !== uploadedAvatarPath) {
         const { error: cleanupError } = await supabase.storage
           .from(avatarBucket)
           .remove([previousAvatarPath]);
@@ -142,6 +192,17 @@ export function ProfileSettings({
       setMessage(cleanupWarning || "Your profile has been saved.");
       setIsError(Boolean(cleanupWarning));
       setSelectedAvatar(null);
+      setName(pendingSubmission.name);
+      setPhoneNumber(pendingSubmission.phone);
+      setUserAddress(pendingSubmission.address);
+      setInitialProfile({
+        name: pendingSubmission.name,
+        phone: pendingSubmission.phone,
+        address: pendingSubmission.address,
+        avatarPath: uploadedAvatarPath ?? initialProfile.avatarPath,
+      });
+      setPendingSubmission(null);
+      setSummaryChanges([]);
       router.refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not save your profile.");
@@ -244,20 +305,12 @@ export function ProfileSettings({
           </label>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          {message ? (
-            <p
-              role={isError ? "alert" : "status"}
-              className={`inline-flex items-center gap-1.5 text-xs ${isError ? "text-danger" : "text-success"}`}
-            >
-              {isError ? null : <Check className="h-3.5 w-3.5" />}
-              {message}
-            </p>
-          ) : (
+          {!message ? (
             <p className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
               <UserRound className="h-3.5 w-3.5" />
               Profile changes are saved to your account.
             </p>
-          )}
+          ) : null}
           <button
             type="submit"
             disabled={isSaving}
@@ -268,6 +321,30 @@ export function ProfileSettings({
           </button>
         </div>
       </form>
+      {message && (
+        <div
+          role={isError ? "alert" : "status"}
+          className={`fixed right-4 top-4 z-[110] flex max-w-[min(24rem,calc(100vw-2rem))] items-center gap-2 rounded-xl border bg-card px-4 py-3 text-sm text-card-foreground shadow-xl ${
+            isError ? "border-danger/40" : "border-success/40"
+          }`}
+        >
+          {!isError && <Check className="h-4 w-4 shrink-0 text-success" />}
+          <span>{message}</span>
+        </div>
+      )}
+      <ActionSummaryModal
+        open={pendingSubmission !== null}
+        title="Review profile changes"
+        description="Confirm the profile details you are about to save."
+        changes={summaryChanges}
+        isPending={isSaving}
+        onCancel={() => {
+          if (isSaving) return;
+          setPendingSubmission(null);
+          setSummaryChanges([]);
+        }}
+        onConfirm={() => void confirmSave()}
+      />
     </section>
   );
 }

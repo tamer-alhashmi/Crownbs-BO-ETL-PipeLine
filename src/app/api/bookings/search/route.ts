@@ -46,7 +46,7 @@ export async function GET(request: Request) {
         NULLIF(concat_ws(' ', b.source_data->>'Guest First Name', b.source_data->>'Guest Last Name'), ''),
         ''
       ) AS guest_name,
-      (COALESCE(b.total_override, b.total_amount) + COALESCE((SELECT SUM(ROUND(c.quantity * c.amount * CASE WHEN c.kind = 'DEDUCTION' THEN -1 ELSE 1 END, 2)) FROM booking_charges c WHERE c.booking_id = b.id), 0))::text AS total_amount,
+      (COALESCE(b.total_override, b.total_revenue) + COALESCE((SELECT SUM(ROUND(c.quantity * c.amount * CASE WHEN c.kind = 'DEDUCTION' THEN -1 ELSE 1 END, 2)) FROM booking_charges c WHERE c.booking_id = b.id), 0))::text AS total_amount,
       COALESCE((
         SELECT SUM(p.direct_1)
         FROM payments p
@@ -58,7 +58,7 @@ export async function GET(request: Request) {
           ))
       ), 0)::text AS paid_amount,
       GREATEST(
-        COALESCE(b.total_override, b.total_amount) + COALESCE((SELECT SUM(ROUND(c.quantity * c.amount * CASE WHEN c.kind = 'DEDUCTION' THEN -1 ELSE 1 END, 2)) FROM booking_charges c WHERE c.booking_id = b.id), 0) - COALESCE((
+        COALESCE(b.total_override, b.total_revenue) + COALESCE((SELECT SUM(ROUND(c.quantity * c.amount * CASE WHEN c.kind = 'DEDUCTION' THEN -1 ELSE 1 END, 2)) FROM booking_charges c WHERE c.booking_id = b.id), 0) - COALESCE((
           SELECT SUM(p.direct_1)
           FROM payments p
           WHERE p.deleted_at IS NULL

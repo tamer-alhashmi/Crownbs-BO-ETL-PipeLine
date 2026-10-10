@@ -368,12 +368,13 @@ The Booking CSV’s `Paid Amount` is retained as an imported source field and ca
 The Drive sync Server Action requires an authenticated Supabase user; it does not require a workspace or membership. Google credentials and folder ID are configured server-side.
 
 - CSV files are classified by filename: payment reports containing “Payment(s) Received”; booking reports for H&H/HH, Harbor/Harbour, or Orlando.
-- Booking CSV parsing skips the first metadata row; the next header row is validated against the expected booking headers.
+- Booking CSV parsing skips the first metadata row; the next header row is validated against the expected booking headers. `Check In` and `Check Out` are the only arrival/departure date sources; `Arrival` is retained as estimated-arrival-time text.
+- Booking financial columns preserve `Room/Unit Revenue` as pure room revenue and `Other Revenue` as add-ons/deposits; stored total revenue is their sum. `See <parentRef>` / `C <parentRef>` paid-amount markers are stored as group links and resolved by allocating the parent's collected amount proportionally by room revenue. Payment transaction rows are not modified during this allocation.
 - Crown BS Company is derived from the booking report filename and stored separately from the Property and CompanyName source fields.
 - The payment source amount is the exact `Direct1` column.
 - Rows are deduplicated in memory and written with PostgreSQL JSONB recordset bulk upserts in chunks of 250. Import issues are inserted in chunks of 500.
 - Source upsert keys are `(source_system, booking_reference)` and `(source_system, payment_id)`.
-- Payments are reconciled to bookings after imported files are handled.
+- Payments are linked to bookings after imported files are handled, then group-booking paid amounts are reconciled without changing Payment CSV transactions.
 - Import batch/file statuses and row counts/errors are persisted. Processed Drive files are renamed/suffixed so they are skipped on later syncs.
 - The ETL action revalidates the Reports route after processing.
 
