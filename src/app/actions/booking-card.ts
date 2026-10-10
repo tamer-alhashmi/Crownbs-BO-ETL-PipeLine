@@ -343,7 +343,7 @@ export async function processBookingPayment(input: z.input<typeof paymentSchema>
         source_system: true,
         property_name: true,
         currency_code: true,
-        total_amount: true,
+        total_revenue: true,
         total_override: true,
         source_data: true,
         charges: { select: { amount: true, quantity: true, kind: true } },
@@ -359,7 +359,7 @@ export async function processBookingPayment(input: z.input<typeof paymentSchema>
             .times(charge.kind === "DEDUCTION" ? -1 : 1)
             .toDecimalPlaces(2),
         ),
-      new Decimal((booking.total_override ?? booking.total_amount).toString()),
+      new Decimal((booking.total_override ?? booking.total_revenue).toString()),
     );
     const recordedPayments = await tx.payment.findMany({
       where: {

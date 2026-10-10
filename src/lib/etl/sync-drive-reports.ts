@@ -14,6 +14,8 @@ import {
   type ImportIssueInput,
 } from "@/lib/etl/csv";
 import { parseReportDate } from "@/lib/etl/date";
+import type { DriveSyncProgressEvent } from "@/lib/etl/drive-sync-progress";
+import { allocateGroupPayment, parseDecimalAmount } from "@/lib/reports/aggregation";
 import { prisma } from "@/lib/prisma";
 
 const sourceSystem = "eviivo";
@@ -101,12 +103,14 @@ export async function upsertBookings(
       guest_last_name: string | null;
       arrival_date: string | null;
       departure_date: string | null;
+      estimated_arrival_time: string | null;
       booking_status: string | null;
-      total_amount: string;
+      total_revenue: string;
       paid_amount: string;
-      room_unit_revenue: string;
+      room_revenue: string;
       other_revenue: string | null;
-      deposit_amount: string | null;
+      is_group_payment: boolean;
+      group_payment_parent_ref: string | null;
       currency_code: string | null;
       source_data: Prisma.InputJsonObject;
       created_at: string;
@@ -115,7 +119,17 @@ export async function upsertBookings(
   >();
   const now = new Date().toISOString();
 
-  for (const { rowNumber, source, internalCompany, total, paid, room, other } of rows) {
+  for (const {
+    rowNumber,
+    source,
+    internalCompany,
+    isGroupPayment,
+    groupPaymentParentRef,
+    total,
+    paid,
+    room,
+    other,
+  } of rows) {
     const bookingReference = source["Booking Reference"].trim();
     const guestFirstName = source["Guest First Name"] || null;
     const guestLastName = source["Guest Last Name"] || null;
@@ -128,21 +142,23 @@ export async function upsertBookings(
       source_system: sourceSystem,
       internal_company: internalCompany,
       property_name: source.Property || null,
-      booking_date: asDateOnly(source["Booking Date"]),
+      booking_date: asDateOnly(source["Booking Date"] || source["Booking Date and Time"]),
       booking_reference: bookingReference,
       order_reference: source["Order Reference"] || null,
       ota_reference: source["OTA Reference"] || null,
       guest_name: [guestFirstName, guestLastName].filter(Boolean).join(" ") || null,
       guest_first_name: guestFirstName,
       guest_last_name: guestLastName,
-      arrival_date: asDateOnly(source["Check In"] || source.Arrival),
+      arrival_date: asDateOnly(source["Check In"]),
       departure_date: asDateOnly(source["Check Out"]),
+      estimated_arrival_time: source.Arrival || null,
       booking_status: source["Booking Status"] || null,
-      total_amount: new Decimal(total).toFixed(2),
+      total_revenue: new Decimal(total).toFixed(2),
       paid_amount: new Decimal(paid).toFixed(2),
-      room_unit_revenue: new Decimal(room).toFixed(2),
-      other_revenue: other,
-      deposit_amount: other,
+      room_revenue: new Decimal(room).toFixed(2),
+      other_revenue: other === null ? null : new Decimal(other).toFixed(2),
+      is_group_payment: isGroupPayment,
+      group_payment_parent_ref: groupPaymentParentRef,
       currency_code: source.Currency?.trim().toUpperCase() || null,
       source_data: asJson(source),
       created_at: now,
@@ -159,24 +175,26 @@ export async function upsertBookings(
         "internal_company", "property_name", "booking_date", "booking_reference",
         "order_reference", "ota_reference", "guest_name", "guest_first_name",
         "guest_last_name", "arrival_date", "departure_date", "booking_status",
-        "total_amount", "paid_amount", "room_unit_revenue", "other_revenue",
-        "deposit_amount", "currency_code", "source_data", "created_at", "updated_at"
+        "estimated_arrival_time", "total_revenue", "paid_amount", "room_revenue", "other_revenue",
+        "is_group_payment", "group_payment_parent_ref", "currency_code", "source_data", "created_at", "updated_at"
       )
       SELECT
         row_data.id, row_data.import_file_id, row_data.source_row_number, row_data.source_system,
         row_data.internal_company, row_data.property_name, row_data.booking_date, row_data.booking_reference,
         row_data.order_reference, row_data.ota_reference, row_data.guest_name, row_data.guest_first_name,
         row_data.guest_last_name, row_data.arrival_date, row_data.departure_date, row_data.booking_status,
-        row_data.total_amount, row_data.paid_amount, row_data.room_unit_revenue, row_data.other_revenue,
-        row_data.deposit_amount, row_data.currency_code, row_data.source_data, row_data.created_at, row_data.updated_at
+        row_data.estimated_arrival_time, row_data.total_revenue, row_data.paid_amount, row_data.room_revenue,
+        row_data.other_revenue, row_data.is_group_payment, row_data.group_payment_parent_ref,
+        row_data.currency_code, row_data.source_data, row_data.created_at, row_data.updated_at
       FROM jsonb_to_recordset(${JSON.stringify(chunk)}::jsonb) AS row_data(
         "id" UUID, "import_file_id" UUID, "source_row_number" INTEGER, "source_system" VARCHAR(64),
         "internal_company" VARCHAR(80), "property_name" VARCHAR(200), "booking_date" DATE,
         "booking_reference" VARCHAR(128), "order_reference" VARCHAR(128), "ota_reference" VARCHAR(128),
         "guest_name" VARCHAR(200), "guest_first_name" VARCHAR(120), "guest_last_name" VARCHAR(120),
         "arrival_date" DATE, "departure_date" DATE, "booking_status" VARCHAR(80),
-        "total_amount" DECIMAL(10,2), "paid_amount" DECIMAL(10,2), "room_unit_revenue" DECIMAL(10,2),
-        "other_revenue" DECIMAL(10,2), "deposit_amount" DECIMAL(10,2), "currency_code" CHAR(3),
+        "estimated_arrival_time" VARCHAR(80), "total_revenue" DECIMAL(10,2),
+        "paid_amount" DECIMAL(10,2), "room_revenue" DECIMAL(10,2), "other_revenue" DECIMAL(10,2),
+        "is_group_payment" BOOLEAN, "group_payment_parent_ref" VARCHAR(128), "currency_code" CHAR(3),
         "source_data" JSONB, "created_at" TIMESTAMPTZ(6), "updated_at" TIMESTAMPTZ(6)
       )
       ON CONFLICT ("source_system", "booking_reference") DO UPDATE SET
@@ -192,12 +210,14 @@ export async function upsertBookings(
         "guest_last_name" = EXCLUDED."guest_last_name",
         "arrival_date" = EXCLUDED."arrival_date",
         "departure_date" = EXCLUDED."departure_date",
+        "estimated_arrival_time" = EXCLUDED."estimated_arrival_time",
         "booking_status" = EXCLUDED."booking_status",
-        "total_amount" = EXCLUDED."total_amount",
+        "total_revenue" = EXCLUDED."total_revenue",
         "paid_amount" = EXCLUDED."paid_amount",
-        "room_unit_revenue" = EXCLUDED."room_unit_revenue",
+        "room_revenue" = EXCLUDED."room_revenue",
         "other_revenue" = EXCLUDED."other_revenue",
-        "deposit_amount" = EXCLUDED."deposit_amount",
+        "is_group_payment" = EXCLUDED."is_group_payment",
+        "group_payment_parent_ref" = EXCLUDED."group_payment_parent_ref",
         "currency_code" = EXCLUDED."currency_code",
         "source_data" = EXCLUDED."source_data",
         "updated_at" = EXCLUDED."updated_at"
@@ -313,8 +333,108 @@ async function linkPaymentsToBookings() {
   `;
 }
 
+async function reconcileGroupBookingPayments() {
+  const members = await prisma.booking.findMany({
+    where: {
+      source_system: sourceSystem,
+      is_group_payment: true,
+      group_payment_parent_ref: { not: null },
+      deleted_at: null,
+    },
+    select: {
+      booking_reference: true,
+      group_payment_parent_ref: true,
+      room_revenue: true,
+    },
+  });
+  const parentReferences = [...new Set(
+    members.map((member) => member.group_payment_parent_ref).filter(
+      (reference): reference is string => reference !== null,
+    ),
+  )];
+  if (!parentReferences.length) return;
+
+  const parents = await prisma.booking.findMany({
+    where: {
+      source_system: sourceSystem,
+      booking_reference: { in: parentReferences },
+      deleted_at: null,
+    },
+    select: {
+      booking_reference: true,
+      room_revenue: true,
+      source_data: true,
+      is_group_payment: true,
+    },
+  });
+  const parentsByReference = new Map(
+    parents.map((parent) => [parent.booking_reference, parent]),
+  );
+  const childrenByParent = new Map<string, typeof members>();
+  for (const member of members) {
+    const parentReference = member.group_payment_parent_ref;
+    if (!parentReference) continue;
+    const children = childrenByParent.get(parentReference) ?? [];
+    children.push(member);
+    childrenByParent.set(parentReference, children);
+  }
+
+  const updates = new Map<string, string>();
+  for (const [parentReference, children] of childrenByParent) {
+    const parent = parentsByReference.get(parentReference);
+    if (!parent) {
+      throw new Error(`Group payment parent booking "${parentReference}" was not found.`);
+    }
+    if (parent.is_group_payment) {
+      throw new Error(`Group payment parent "${parentReference}" is itself a group member.`);
+    }
+    const sourceData =
+      parent.source_data && typeof parent.source_data === "object" && !Array.isArray(parent.source_data)
+        ? parent.source_data as Prisma.JsonObject
+        : null;
+    const sourcePaid = sourceData?.["Paid Amount"];
+    if (typeof sourcePaid !== "string" && typeof sourcePaid !== "number") {
+      throw new Error(`Parent booking "${parentReference}" has no numeric source Paid Amount.`);
+    }
+    const collected = parseDecimalAmount(String(sourcePaid), "Paid Amount");
+    const allocations = allocateGroupPayment(
+      collected.toFixed(2),
+      parentReference,
+      [
+        { bookingReference: parentReference, roomRevenue: parent.room_revenue.toString() },
+        ...children.map((child) => ({
+          bookingReference: child.booking_reference,
+          roomRevenue: child.room_revenue.toString(),
+        })),
+      ],
+    );
+    for (const allocation of allocations) {
+      updates.set(allocation.bookingReference, allocation.paidAmount);
+    }
+  }
+
+  const records = [...updates].map(([booking_reference, paid_amount]) => ({
+    booking_reference,
+    paid_amount,
+  }));
+  for (let offset = 0; offset < records.length; offset += upsertChunkSize) {
+    const chunk = records.slice(offset, offset + upsertChunkSize);
+    await prisma.$executeRaw(Prisma.sql`
+      UPDATE "bookings" AS booking
+      SET "paid_amount" = allocation.paid_amount
+      FROM jsonb_to_recordset(${JSON.stringify(chunk)}::jsonb) AS allocation(
+        "booking_reference" VARCHAR(128), "paid_amount" DECIMAL(10,2)
+      )
+      WHERE booking."source_system" = ${sourceSystem}
+        AND booking."booking_reference" = allocation.booking_reference
+        AND booking."deleted_at" IS NULL
+    `);
+  }
+}
+
 export async function syncDriveReports(
   userId: string,
+  onProgress?: (event: DriveSyncProgressEvent) => void,
 ): Promise<DriveSyncSummary> {
   const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
   if (!folderId) throw new Error("GOOGLE_DRIVE_FOLDER_ID is not configured.");
@@ -325,6 +445,10 @@ export async function syncDriveReports(
       (entry): entry is { file: DriveReportFile; reportType: "bookings" | "payments" } =>
         entry.reportType !== null,
     );
+  onProgress?.({
+    type: "files",
+    files: files.map(({ file }) => ({ id: file.id, name: file.name, status: "pending" })),
+  });
 
   if (!files.length) {
     return {
@@ -354,6 +478,10 @@ export async function syncDriveReports(
   };
 
   for (const { file, reportType } of files) {
+    onProgress?.({
+      type: "file",
+      file: { id: file.id, name: file.name, status: "processing" },
+    });
     let importFileId: string | undefined;
     try {
       const importFile = await prisma.importFile.create({
@@ -419,9 +547,17 @@ export async function syncDriveReports(
       }
       await markDriveFileProcessed(file);
       summary.processedFiles++;
+      onProgress?.({
+        type: "file",
+        file: { id: file.id, name: file.name, status: "completed" },
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown import failure.";
       summary.errors.push(`${file.name}: ${message}`);
+      onProgress?.({
+        type: "file",
+        file: { id: file.id, name: file.name, status: "failed", error: message },
+      });
       if (importFileId) {
         await prisma.importFile.update({
           where: { id: importFileId },
@@ -433,9 +569,10 @@ export async function syncDriveReports(
 
   try {
     await linkPaymentsToBookings();
+    await reconcileGroupBookingPayments();
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to link payments to bookings.";
-    summary.errors.push(`Payment-to-booking reconciliation: ${message}`);
+    const message = error instanceof Error ? error.message : "Unable to reconcile booking payments.";
+    summary.errors.push(`Payment and group-booking reconciliation: ${message}`);
   }
 
   await prisma.importBatch.update({

@@ -11,6 +11,8 @@ import {
   updateBookingWorkflow,
 } from "@/app/actions/booking-card";
 import type { BookingCardData } from "@/lib/bookings/card-data";
+import { ActionSummaryModal } from "@/components/ui/ActionSummaryModal";
+import { useFormDiff, type FormChange } from "@/lib/forms/use-form-diff";
 import {
   CalendarDays,
   Check,
@@ -437,6 +439,10 @@ function BookingCardPanel({
     address: "",
     notes: "",
   });
+  const [guestBaseline, setGuestBaseline] = useState<typeof guest | null>(null);
+  const [pendingGuest, setPendingGuest] = useState<typeof guest | null>(null);
+  const [guestSummaryChanges, setGuestSummaryChanges] = useState<FormChange[]>([]);
+  const getChanges = useFormDiff();
   const [directTotal, setDirectTotal] = useState("");
   const [chargeDescription, setChargeDescription] = useState("");
   const [chargeAmount, setChargeAmount] = useState("");
@@ -464,6 +470,17 @@ function BookingCardPanel({
       setBooking(result.booking);
       setDirectTotal(result.booking.totalAmount);
       setGuest({
+        name: result.booking.guest.name,
+        firstName: result.booking.guest.firstName,
+        shortName: result.booking.guest.shortName,
+        phone: result.booking.guest.phone,
+        email: result.booking.guest.email,
+        company: result.booking.guest.company,
+        taxVat: result.booking.guest.taxVat,
+        address: result.booking.guest.address,
+        notes: result.booking.guest.notes,
+      });
+      setGuestBaseline({
         name: result.booking.guest.name,
         firstName: result.booking.guest.firstName,
         shortName: result.booking.guest.shortName,
@@ -506,6 +523,17 @@ function BookingCardPanel({
         address: result.booking.guest.address,
         notes: result.booking.guest.notes,
       });
+      setGuestBaseline({
+        name: result.booking.guest.name,
+        firstName: result.booking.guest.firstName,
+        shortName: result.booking.guest.shortName,
+        phone: result.booking.guest.phone,
+        email: result.booking.guest.email,
+        company: result.booking.guest.company,
+        taxVat: result.booking.guest.taxVat,
+        address: result.booking.guest.address,
+        notes: result.booking.guest.notes,
+      });
       router.refresh();
       notify(successMessage);
       return true;
@@ -514,6 +542,43 @@ function BookingCardPanel({
       return false;
     } finally {
       setBusy(false);
+    }
+  }
+
+  function stageGuestSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!guestBaseline) return;
+    const labels = {
+      name: "Guest name",
+      firstName: "Forename",
+      shortName: "Short name",
+      phone: "Phone",
+      email: "Email",
+      company: "Company name",
+      taxVat: "Tax/VAT number",
+      address: "Address",
+      notes: "Guest notes",
+    } satisfies Record<keyof typeof guest, string>;
+    const changes = getChanges(guestBaseline, guest, labels);
+    if (!changes.length) {
+      notify("There are no guest detail changes to save.");
+      return;
+    }
+    setPendingGuest({ ...guest });
+    setGuestSummaryChanges(changes);
+  }
+
+  async function confirmGuestSave() {
+    if (!pendingGuest || !booking) return;
+    const submittedGuest = pendingGuest;
+    const saved = await runMutation(
+      () => saveBookingGuestDetails(booking.id, submittedGuest),
+      "Guest details updated.",
+    );
+    if (saved) {
+      setGuestBaseline(submittedGuest);
+      setPendingGuest(null);
+      setGuestSummaryChanges([]);
     }
   }
 
@@ -694,13 +759,7 @@ function BookingCardPanel({
 
         {tab === "Guest" && (
           <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void runMutation(
-                () => saveBookingGuestDetails(booking.id, guest),
-                "Guest details updated.",
-              );
-            }}
+            onSubmit={stageGuestSave}
             className="space-y-4"
           >
             <div className="flex items-center justify-between gap-3">
@@ -740,7 +799,7 @@ function BookingCardPanel({
               />
             </label>
             <button disabled={busy} className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60">
-              Save guest details
+              Review guest changes
             </button>
           </form>
         )}
@@ -1139,6 +1198,19 @@ function BookingCardPanel({
           </button>
         </div>
       </footer>
+      <ActionSummaryModal
+        open={pendingGuest !== null}
+        title="Review guest detail changes"
+        description={`Confirm the changes for booking ${booking.bookingReference}.`}
+        changes={guestSummaryChanges}
+        isPending={busy}
+        onCancel={() => {
+          if (busy) return;
+          setPendingGuest(null);
+          setGuestSummaryChanges([]);
+        }}
+        onConfirm={() => void confirmGuestSave()}
+      />
     </aside>
   );
 }

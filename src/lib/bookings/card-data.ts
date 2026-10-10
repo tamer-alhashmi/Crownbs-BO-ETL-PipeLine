@@ -37,7 +37,7 @@ export async function getBookingCardData(id: string) {
       property_name: true,
       arrival_date: true,
       departure_date: true,
-      total_amount: true,
+      total_revenue: true,
       total_override: true,
       paid_amount: true,
       manual_paid_amount: true,
@@ -120,7 +120,7 @@ export async function getBookingCardData(id: string) {
           .times(charge.kind === "DEDUCTION" ? -1 : 1)
           .toDecimalPlaces(2),
       ),
-    new Decimal((booking.total_override ?? booking.total_amount).toString()),
+    new Decimal((booking.total_override ?? booking.total_revenue).toString()),
   );
   const paid = payments.reduce(
     (sum, payment) => sum.plus(payment.direct_1.toString()),
@@ -142,7 +142,7 @@ export async function getBookingCardData(id: string) {
           source_data: true,
           guest_overrides: true,
           property_name: true,
-          total_amount: true,
+          total_revenue: true,
           total_override: true,
           charges: {
             select: { amount: true, quantity: true, kind: true },
@@ -161,7 +161,7 @@ export async function getBookingCardData(id: string) {
         ),
       new Decimal(0),
     );
-    return sum.plus(groupBooking.total_override ?? groupBooking.total_amount).plus(chargesTotal);
+    return sum.plus(groupBooking.total_override ?? groupBooking.total_revenue).plus(chargesTotal);
   }, new Decimal(0));
 
   return {

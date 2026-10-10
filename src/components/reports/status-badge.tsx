@@ -2,11 +2,14 @@ export function StatusBadge({ status }: { status: string }) {
   const normalized = status.toLocaleLowerCase();
   const className =
     normalized === "settled" ||
+    normalized === "prepaid" ||
     normalized === "confirmed" ||
     normalized === "checked in" ||
     normalized === "checked out"
       ? "bg-success/10 text-success"
-      : normalized === "pending" || normalized === "awaiting payment"
+      : normalized === "pending" ||
+          normalized === "awaiting payment" ||
+          normalized === "payment on arrival"
         ? "bg-warning/10 text-warning"
         : "bg-muted text-muted-foreground";
 

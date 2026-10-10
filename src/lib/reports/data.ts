@@ -110,7 +110,7 @@ function bookingFilterExpression(alias: string, id: string): Prisma.Sql | null {
   }
   if (id === "Total Revenue") {
     return Prisma.sql`(
-      COALESCE(${Prisma.raw(alias)}.total_override, ${Prisma.raw(alias)}.total_amount)
+      COALESCE(${Prisma.raw(alias)}.total_override, ${Prisma.raw(alias)}.total_revenue)
       + COALESCE((
         SELECT SUM(ROUND(c.quantity * c.amount * CASE WHEN c.kind = 'DEDUCTION' THEN -1 ELSE 1 END, 2))
         FROM booking_charges c WHERE c.booking_id = ${Prisma.raw(alias)}.id
@@ -145,13 +145,13 @@ function bookingFilterExpression(alias: string, id: string): Prisma.Sql | null {
     ), 0)`;
     if (method) return Prisma.sql`${paymentTotal}::text`;
     if (id === "transaction-total") return Prisma.sql`${paymentTotal}::text`;
-    const total = Prisma.sql`COALESCE(${Prisma.raw(alias)}.total_override, ${Prisma.raw(alias)}.total_amount) + COALESCE((
+    const total = Prisma.sql`COALESCE(${Prisma.raw(alias)}.total_override, ${Prisma.raw(alias)}.total_revenue) + COALESCE((
       SELECT SUM(ROUND(c.quantity * c.amount * CASE WHEN c.kind = 'DEDUCTION' THEN -1 ELSE 1 END, 2))
       FROM booking_charges c WHERE c.booking_id = ${Prisma.raw(alias)}.id
     ), 0)`;
     const due = Prisma.sql`GREATEST(${total} - ${paymentTotal}, 0)`;
     if (id === "due-amount") return Prisma.sql`${due}::text`;
-    return Prisma.sql`CASE WHEN ${due} = 0 THEN 'Paid' WHEN ${paymentTotal} = 0 THEN 'Unpaid' ELSE 'Partially paid' END`;
+    return Prisma.sql`CASE WHEN ${due} = 0 THEN 'Prepaid' WHEN ${paymentTotal} = 0 THEN 'Payment on arrival' ELSE 'Partially paid' END`;
   }
   if ((BOOKING_HEADERS as readonly string[]).includes(id)) {
     return Prisma.sql`COALESCE(${Prisma.raw(alias)}.guest_overrides->>${id}, ${Prisma.raw(alias)}.source_data->>${id}, '')`;
@@ -281,7 +281,7 @@ export async function getReports(filters: ReportFilters) {
       >(Prisma.sql`
         SELECT
           COUNT(*)::int AS booking_total,
-          COALESCE(SUM(COALESCE(b.total_override, b.total_amount) + COALESCE((
+          COALESCE(SUM(COALESCE(b.total_override, b.total_revenue) + COALESCE((
             SELECT SUM(ROUND(charges.quantity * charges.amount * CASE WHEN charges.kind = 'DEDUCTION' THEN -1 ELSE 1 END, 2))
             FROM booking_charges charges
             WHERE charges.booking_id = b.id
@@ -296,7 +296,7 @@ export async function getReports(filters: ReportFilters) {
                 AND p.source_system = b.source_system
               ))
           ), 0)), 0)::text AS paid,
-          COALESCE(SUM(GREATEST(COALESCE(b.total_override, b.total_amount) + COALESCE((
+          COALESCE(SUM(GREATEST(COALESCE(b.total_override, b.total_revenue) + COALESCE((
             SELECT SUM(ROUND(charges.quantity * charges.amount * CASE WHEN charges.kind = 'DEDUCTION' THEN -1 ELSE 1 END, 2))
             FROM booking_charges charges
             WHERE charges.booking_id = b.id
@@ -457,7 +457,7 @@ export async function getReports(filters: ReportFilters) {
       const source = bookingSources[index];
       if (!source) continue;
       const chargeTotal = chargeTotals.get(record.id) ?? new Prisma.Decimal(0);
-      source.totalAmount = (record.total_override ?? record.total_amount)
+      source.totalAmount = (record.total_override ?? record.total_revenue)
         .plus(chargeTotal)
         .toFixed(2);
       source.source["Other Revenue"] = parseDecimalAmount(
